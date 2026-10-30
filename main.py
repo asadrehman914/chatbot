@@ -1,3 +1,4 @@
+from database import save_chat
 
 import os
 from pathlib import Path
@@ -8,6 +9,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from groq import AsyncGroq
+
+from database import save_chat
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -40,20 +43,28 @@ Rules:
 - Never pretend to know something you do not know.
 """
 
+
 class Message(BaseModel):
     role: str
     content: str = Field(min_length=1, max_length=4000)
 
+
 class ChatRequest(BaseModel):
     messages: list[Message] = Field(min_length=1, max_length=20)
+
 
 @app.get("/")
 def home():
     return FileResponse(BASE_DIR / "static" / "index.html")
 
+
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "api_key_configured": client is not None}
+    return {
+        "status": "ok",
+        "api_key_configured": client is not None
+    }
+
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
@@ -75,9 +86,14 @@ async def chat(request: ChatRequest):
 
     for message in request.messages:
         if message.role not in ("user", "assistant"):
-            raise HTTPException(status_code=400, detail="Invalid message role.")
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid message role."
+            )
+
         messages.append(message.model_dump())
 
+    
     try:
         response = await client.chat.completions.create(
             model=MODEL,
@@ -85,13 +101,19 @@ async def chat(request: ChatRequest):
             max_tokens=1000
         )
 
-        return {
-            "reply": response.choices[0].message.content
+        reply = (
+            response.choices[0].message.content
             or "Koi jawab nahi mila."
-        }
+        )
+
+        print("Saving chat now...")
+        save_chat(request.messages[-1].content, reply)
+        print("Chat saved successfully!")
+
+        return {"reply": reply}
 
     except Exception as error:
-        print("AI API error:", type(error).__name__)
+        print("AI API or database error:", type(error).__name__)
         status = getattr(error, "status_code", None)
 
         if status == 429:
@@ -99,6 +121,6 @@ async def chat(request: ChatRequest):
         elif status == 401:
             detail = "API key invalid hai. .env file check karo."
         else:
-            detail = "AI service se jawab nahi mila. API settings check karo."
+            detail = "AI service ya database se related error aaya."
 
         raise HTTPException(status_code=502, detail=detail)
